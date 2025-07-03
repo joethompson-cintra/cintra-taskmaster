@@ -1,4 +1,5 @@
 import winston from 'winston';
+import DailyRotateFile from 'winston-daily-rotate-file';
 
 const logLevel = process.env.LOG_LEVEL || 'info';
 const isDevelopment = process.env.NODE_ENV === 'development';
@@ -16,18 +17,24 @@ export const logger = winston.createLogger({
         service: 'typescript-mcp-auth-server' 
     },
     transports: [
-        // Write all logs with importance level of 'error' or higher to error.log
-        new winston.transports.File({ 
-            filename: 'logs/error.log', 
+        // Write all logs with importance level of 'error' or higher to error.log with rotation
+        new DailyRotateFile({
+            filename: 'logs/error-%DATE%.log',
+            datePattern: 'YYYY-MM-DD',
             level: 'error',
+            maxFiles: '14d', // Keep logs for 14 days
+            maxSize: '20m',  // Rotate when file reaches 20MB
             format: winston.format.combine(
                 winston.format.timestamp(),
                 winston.format.json()
             )
         }),
-        // Write all logs to combined.log
-        new winston.transports.File({ 
-            filename: 'logs/combined.log',
+        // Write all logs to combined.log with rotation
+        new DailyRotateFile({
+            filename: 'logs/combined-%DATE%.log',
+            datePattern: 'YYYY-MM-DD',
+            maxFiles: '30d', // Keep logs for 30 days
+            maxSize: '20m',  // Rotate when file reaches 20MB
             format: winston.format.combine(
                 winston.format.timestamp(),
                 winston.format.json()
@@ -36,7 +43,8 @@ export const logger = winston.createLogger({
     ]
 });
 
-// If we're in development, also log to console with a more readable format
+// In development, add console logging with readable format (safe for MCP)
+// In production, disable console logging to avoid MCP protocol interference
 if (isDevelopment) {
     logger.add(new winston.transports.Console({
         format: winston.format.combine(
@@ -50,14 +58,7 @@ if (isDevelopment) {
             })
         )
     }));
-} else {
-    // In production, also log to console but with JSON format
-    logger.add(new winston.transports.Console({
-        format: winston.format.combine(
-            winston.format.timestamp(),
-            winston.format.json()
-        )
-    }));
 }
+// Note: Console logging is disabled in production to prevent MCP protocol issues
 
 export default logger; 
