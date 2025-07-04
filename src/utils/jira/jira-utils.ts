@@ -17,6 +17,7 @@ import {
 	FetchOptions,
 	CompressionResult,
 } from '../../types/jira';
+import { generateText } from '../ai-services';
 
 /**
  * Estimate token count for text content
@@ -805,7 +806,7 @@ export async function fetchTasksFromJira(parentKey: string | null, withSubtasks:
  */
 export async function createJiraIssue(jiraTicket: any, options: FetchOptions = {}): Promise<any> {
 	const { jiraConfig, log } = options;
-	
+
 	try {
 
 		// Check if Jira is enabled using the JiraClient
@@ -1347,398 +1348,384 @@ export async function findNextJiraTask(
 	}
 }
 
-// /**
-//  * Updates one or more Jira issues (tasks or subtasks) with new information based on a prompt.
-//  * @param {string|Array<string>} issueIds - Single Jira issue ID or array of IDs to update (in format "PROJ-123")
-//  * @param {string} prompt - New information or context to incorporate into the issue(s)
-//  * @param {boolean} useResearch - Whether to use Perplexity AI for research-backed updates
-//  * @param {Object} options - Additional options including session and logging
-//  * @returns {Promise} - Result object with success status and updated issue details
-//  */
-// export async function updateJiraIssues(
-// 	issueIds: string[],
-// 	prompt: string,
-// 	useResearch: boolean = false,
-// 	options: UpdateIssuesOptions = {}
-// ): Promise<any> {
-// 	const { session, projectRoot } = options;
+/**
+ * Updates one or more Jira issues (tasks or subtasks) with new information based on a prompt.
+ * @param {string|Array<string>} issueIds - Single Jira issue ID or array of IDs to update (in format "PROJ-123")
+ * @param {string} prompt - New information or context to incorporate into the issue(s)
+ * @param {boolean} useResearch - Whether to use Perplexity AI for research-backed updates
+ * @param {Object} options - Additional options including session and logging
+ * @returns {Promise} - Result object with success status and updated issue details
+ */
+export async function updateJiraIssues(
+	issueIds: string[],
+	prompt: string,
+	useResearch: boolean = false,
+	options: FetchOptions = {}
+): Promise<any> {
+	const { jiraConfig, log } = options;
 
-// 	// Get logger from options or use silent logger for MCP compatibility
-// 	const log = options.mcpLog || {
-// 		info: () => {},
-// 		warn: () => {},
-// 		error: () => {},
-// 		debug: () => {}
-// 	} as Logger;
+	try {
+		// Check if Jira is enabled using the JiraClient
+		const jiraClient = new JiraClient(jiraConfig);
 
-// 	try {
-// 		// Check if Jira is enabled using the JiraClient
-// 		const jiraClient = new JiraClient();
+		if (!jiraClient.isReady()) {
+			return {
+				success: false,
+				error: {
+					code: 'JIRA_NOT_ENABLED',
+					message: 'Jira integration is not properly configured'
+				}
+			};
+		}
 
-// 		if (!jiraClient.isReady()) {
-// 			return {
-// 				success: false,
-// 				error: {
-// 					code: 'JIRA_NOT_ENABLED',
-// 					message: 'Jira integration is not properly configured'
-// 				}
-// 			};
-// 		}
+		// Handle both single ID (string) and multiple IDs (array)
+		const isMultipleIssues = Array.isArray(issueIds);
+		const issueIdArray = isMultipleIssues ? issueIds : [issueIds];
 
-// 		// Handle both single ID (string) and multiple IDs (array)
-// 		const isMultipleIssues = Array.isArray(issueIds);
-// 		const issueIdArray = isMultipleIssues ? issueIds : [issueIds];
+		// Validate input
+		if (!issueIdArray.length) {
+			throw new Error(
+				'Missing required parameter: issueIds must be a non-empty string or array'
+			);
+		}
 
-// 		// Validate input
-// 		if (!issueIdArray.length) {
-// 			throw new Error(
-// 				'Missing required parameter: issueIds must be a non-empty string or array'
-// 			);
-// 		}
+		if (!prompt) {
+			throw new Error('Missing required parameter: prompt');
+		}
 
-// 		if (!prompt) {
-// 			throw new Error('Missing required parameter: prompt');
-// 		}
+		// Validate all issue IDs have the correct format (PROJ-123)
+		issueIdArray.forEach((id) => {
+			if (!(typeof id === 'string' && id.includes('-'))) {
+				throw new Error(`Issue ID "${id}" must be in the format "PROJ-123"`);
+			}
+		});
 
-// 		// Validate all issue IDs have the correct format (PROJ-123)
-// 		issueIdArray.forEach((id) => {
-// 			if (!(typeof id === 'string' && id.includes('-'))) {
-// 				throw new Error(`Issue ID "${id}" must be in the format "PROJ-123"`);
-// 			}
-// 		});
+		log.info(`Updating ${issueIdArray.length} Jira issue(s) based on prompt`);
 
-// 		log.info(`Updating ${issueIdArray.length} Jira issue(s) based on prompt`);
+		// Build JQL query to get the specific issues by ID
+		const formattedIds = issueIdArray.map((id) => `"${id}"`).join(',');
+		const jql = `issuekey IN (${formattedIds}) ORDER BY issuekey ASC`;
 
-// 		// Build JQL query to get the specific issues by ID
-// 		const formattedIds = issueIdArray.map((id) => `"${id}"`).join(',');
-// 		const jql = `issuekey IN (${formattedIds}) ORDER BY issuekey ASC`;
+		log.info(`Fetching Jira issues with JQL: ${jql}`);
 
-// 		log.info(`Fetching Jira issues with JQL: ${jql}`);
+		// Use jiraClient.searchIssues instead of direct client.get
+		const searchResult = await jiraClient.searchIssues(jql, {
+			maxResults: 100,
+			expand: 'true',
+			log
+		});
 
-// 		// Use jiraClient.searchIssues instead of direct client.get
-// 		const searchResult = await jiraClient.searchIssues(jql, {
-// 			maxResults: 100,
-// 			expand: 'true',
-// 			log
-// 		});
+		if (!searchResult.success) {
+			return searchResult;
+		}
 
-// 		if (!searchResult.success) {
-// 			return searchResult;
-// 		}
+		const issues = searchResult.data;
+		if (issues.length === 0) {
+			log.info(`No issues found with the specified ID(s)`);
+			return {
+				success: false,
+				error: {
+					code: 'ISSUES_NOT_FOUND',
+					message: `No issues found with the specified ID(s)`
+				}
+			};
+		}
 
-// 		const issues = searchResult.data;
-// 		if (issues.length === 0) {
-// 			log.info(`No issues found with the specified ID(s)`);
-// 			return {
-// 				success: false,
-// 				error: {
-// 					code: 'ISSUES_NOT_FOUND',
-// 					message: `No issues found with the specified ID(s)`
-// 				}
-// 			};
-// 		}
+		// Convert Jira issues to a format suitable for the AI
+		const tasks = issues.map((jiraTicket) => jiraTicket.toTaskMasterFormat());
 
-// 		// Convert Jira issues to a format suitable for the AI
-// 		const tasks = issues.map((jiraTicket) => jiraTicket.toTaskMasterFormat());
+		// Track which issues are subtasks
+		const issueTypeMap = issues.reduce((map: Record<string, any>, jiraTicket) => {
+			map[jiraTicket.jiraKey] = {
+				isSubtask: jiraTicket.issueType === 'Subtask',
+				parentKey: jiraTicket.parentKey
+			};
+			return map;
+		}, {} as Record<string, any>);
 
-// 		// Track which issues are subtasks
-// 		const issueTypeMap = issues.reduce((map: Record<string, any>, jiraTicket) => {
-// 			map[jiraTicket.jiraKey] = {
-// 				isSubtask: jiraTicket.issueType === 'Subtask',
-// 				parentKey: jiraTicket.parentKey
-// 			};
-// 			return map;
-// 		}, {} as Record<string, any>);
+		log.info(
+			`Found ${tasks.length} issue(s) to update (${Object.values(issueTypeMap).filter((i) => i.isSubtask).length} subtasks)`
+		);
 
-// 		log.info(
-// 			`Found ${tasks.length} issue(s) to update (${Object.values(issueTypeMap).filter((i) => i.isSubtask).length} subtasks)`
-// 		);
+		const systemPrompt = `You are an AI assistant helping to update software development tasks based on new context.
+You will be given a set of tasks and a prompt describing changes or new implementation details.
+Your job is to update the tasks to reflect these changes, while preserving their basic structure.
 
-// 		const systemPrompt = `You are an AI assistant helping to update software development tasks based on new context.
-// You will be given a set of tasks and a prompt describing changes or new implementation details.
-// Your job is to update the tasks to reflect these changes, while preserving their basic structure.
+Guidelines:
+1. Maintain the same IDs, statuses, and dependencies unless specifically mentioned in the prompt
+2. Update titles, descriptions, details, and test strategies to reflect the new information
+3. Do not change anything unnecessarily - just adapt what needs to change based on the prompt
+4. You should return ALL the tasks in order, not just the modified ones
+5. Return a complete valid JSON object with the updated tasks array
+6. VERY IMPORTANT: Preserve all subtasks marked as "done" or "completed" - do not modify their content
+7. For tasks with completed subtasks, build upon what has already been done rather than rewriting everything
+8. If an existing completed subtask needs to be changed/undone based on the new context, DO NOT modify it directly
+9. Instead, add a new subtask that clearly indicates what needs to be changed or replaced
+10. Use the existence of completed subtasks as an opportunity to make new subtasks more specific and targeted
 
-// Guidelines:
-// 1. Maintain the same IDs, statuses, and dependencies unless specifically mentioned in the prompt
-// 2. Update titles, descriptions, details, and test strategies to reflect the new information
-// 3. Do not change anything unnecessarily - just adapt what needs to change based on the prompt
-// 4. You should return ALL the tasks in order, not just the modified ones
-// 5. Return a complete valid JSON object with the updated tasks array
-// 6. VERY IMPORTANT: Preserve all subtasks marked as "done" or "completed" - do not modify their content
-// 7. For tasks with completed subtasks, build upon what has already been done rather than rewriting everything
-// 8. If an existing completed subtask needs to be changed/undone based on the new context, DO NOT modify it directly
-// 9. Instead, add a new subtask that clearly indicates what needs to be changed or replaced
-// 10. Use the existence of completed subtasks as an opportunity to make new subtasks more specific and targeted
+The changes described in the prompt should be applied to ALL tasks in the list. Do not wrap your response in \`\`\`json\`\`\``;
 
-// The changes described in the prompt should be applied to ALL tasks in the list. Do not wrap your response in \`\`\`json\`\`\``;
+		const role = useResearch ? 'research' : 'main';
+		const userPrompt = `Here are the tasks to update:\n${JSON.stringify(tasks)}\n\nPlease update these tasks based on the following new context:\n${prompt}\n\nIMPORTANT: In the tasks JSON above, any subtasks with "status": "done" or "status": "completed" should be preserved exactly as is. Build your changes around these completed items.\n\nReturn only the updated tasks as a valid JSON array.`;
 
-// 		const role = useResearch ? 'research' : 'main';
-// 		const userPrompt = `Here are the tasks to update:\n${JSON.stringify(tasks)}\n\nPlease update these tasks based on the following new context:\n${prompt}\n\nIMPORTANT: In the tasks JSON above, any subtasks with "status": "done" or "status": "completed" should be preserved exactly as is. Build your changes around these completed items.\n\nReturn only the updated tasks as a valid JSON array.`;
+		let updates = await generateText(userPrompt, systemPrompt);
 
-// 		let updates = await generateTextService({
-// 			prompt: userPrompt,
-// 			systemPrompt: systemPrompt,
-// 			role,
-// 			session,
-// 			projectRoot
-// 		});
+		// Check if updates is a string and try to parse it as JSON
+		if (typeof updates === 'string') {
+			try {
+				updates = JSON.parse(updates);
+				log.info('Successfully parsed string response into JSON');
+			} catch (parseError: any) {
+				log.error(
+					`Failed to parse updates string as JSON: ${parseError.message}`
+				);
+				throw new Error('Failed to parse LLM response into valid JSON');
+			}
+		}
 
-// 		// Check if updates is a string and try to parse it as JSON
-// 		if (typeof updates === 'string') {
-// 			try {
-// 				updates = JSON.parse(updates);
-// 				log.info('Successfully parsed string response into JSON');
-// 			} catch (parseError: any) {
-// 				log.error(
-// 					`Failed to parse updates string as JSON: ${parseError.message}`
-// 				);
-// 				throw new Error('Failed to parse LLM response into valid JSON');
-// 			}
-// 		}
+		if (!updates || !Array.isArray(updates)) {
+			throw new Error('Failed to generate valid updates, updates: ' + updates);
+		}
 
-// 		if (!updates || !Array.isArray(updates)) {
-// 			throw new Error('Failed to generate valid updates, updates: ' + updates);
-// 		}
+		log.info(`Successfully parsed updates for ${updates.length} issue(s)`);
 
-// 		log.info(`Successfully parsed updates for ${updates.length} issue(s)`);
+		// Apply the updates to Jira
+		const updateResults = [];
+		for (let i = 0; i < updates.length; i++) {
+			const update = updates[i];
+			if (!update.id) {
+				log.warn('Update is missing id identifier, skipping');
+				continue;
+			}
 
-// 		// Apply the updates to Jira
-// 		const updateResults = [];
-// 		for (let i = 0; i < updates.length; i++) {
-// 			const update = updates[i];
-// 			if (!update.id) {
-// 				log.warn('Update is missing id identifier, skipping');
-// 				continue;
-// 			}
+			try {
+				log.info(`Updating Jira issue: ${update.id}`);
 
-// 			try {
-// 				log.info(`Updating Jira issue: ${update.id}`);
+				const issueInfo = issueTypeMap[update.id];
+				const isSubtask = issueInfo?.isSubtask || false;
 
-// 				const issueInfo = issueTypeMap[update.id];
-// 				const isSubtask = issueInfo?.isSubtask || false;
+				// For subtasks, we need to preserve the parent relationship
+				if (isSubtask) {
+					// Get the complete issue data to ensure we preserve parent relation
+					const fullIssueResponse = await jiraClient.fetchIssue(update.id, {
+						log
+					});
+					if (!fullIssueResponse.success) {
+						log.warn(
+							`Failed to fetch full issue details: ${fullIssueResponse.error?.message}`
+						);
+						continue;
+					}
+					const fullIssue = fullIssueResponse.data;
+					const parentKey = fullIssue.parentKey || issueInfo.parentKey;
 
-// 				// For subtasks, we need to preserve the parent relationship
-// 				if (isSubtask) {
-// 					// Get the complete issue data to ensure we preserve parent relation
-// 					const fullIssueResponse = await jiraClient.fetchIssue(update.id, {
-// 						log
-// 					});
-// 					if (!fullIssueResponse.success) {
-// 						log.warn(
-// 							`Failed to fetch full issue details: ${fullIssueResponse.error?.message}`
-// 						);
-// 						continue;
-// 					}
-// 					const fullIssue = fullIssueResponse.data;
-// 					const parentKey = fullIssue.parentKey || issueInfo.parentKey;
+					if (!parentKey) {
+						log.warn(`Subtask ${update.id} is missing parent relationship`);
+					}
+				}
 
-// 					if (!parentKey) {
-// 						log.warn(`Subtask ${update.id} is missing parent relationship`);
-// 					}
-// 				}
+				// Create a JiraTicket with properties from the update
+				const jiraTicket = new JiraTicket({
+					title: update.title,
+					description: update.description,
+					// Include all relevant fields from the update
+					details: update.implementationDetails || update.details,
+					acceptanceCriteria: update.acceptanceCriteria,
+					testStrategy: update.testStrategyTdd || update.testStrategy,
+					// Include other properties
+					priority: update.priority,
+					jiraKey: update.id
+				});
 
-// 				// Create a JiraTicket with properties from the update
-// 				const jiraTicket = new JiraTicket({
-// 					title: update.title,
-// 					description: update.description,
-// 					// Include all relevant fields from the update
-// 					details: update.implementationDetails || update.details,
-// 					acceptanceCriteria: update.acceptanceCriteria,
-// 					testStrategy: update.testStrategyTdd || update.testStrategy,
-// 					// Include other properties
-// 					priority: update.priority,
-// 					jiraKey: update.id
-// 				});
+				// For subtasks, preserve the issue type
+				if (isSubtask) {
+					jiraTicket.issueType = 'Subtask';
+					jiraTicket.parentKey = issueInfo.parentKey;
+				}
 
-// 				// For subtasks, preserve the issue type
-// 				if (isSubtask) {
-// 					jiraTicket.issueType = 'Subtask';
-// 					jiraTicket.parentKey = issueInfo.parentKey;
-// 				}
+				// Convert to proper Jira request format
+				const requestData = jiraTicket.toJiraRequestData();
 
-// 				// Convert to proper Jira request format
-// 				const requestData = jiraTicket.toJiraRequestData();
+				// Apply the updates if there are any fields to update
+				if (Object.keys(requestData.fields).length > 0) {
+					try {
+											// We don't want to change certain fields in the update
+					delete (requestData.fields as any).issuetype;
+					delete (requestData.fields as any).project;
 
-// 				// Apply the updates if there are any fields to update
-// 				if (Object.keys(requestData.fields).length > 0) {
-// 					try {
-// 											// We don't want to change certain fields in the update
-// 					delete (requestData.fields as any).issuetype;
-// 					delete (requestData.fields as any).project;
+						// For subtasks, don't change the parent relationship
+						if (isSubtask) {
+							delete requestData.fields.parent;
+						}
 
-// 						// For subtasks, don't change the parent relationship
-// 						if (isSubtask) {
-// 							delete requestData.fields.parent;
-// 						}
+						// Only apply the update if we have fields to update
+						if (Object.keys(requestData.fields).length > 0) {
+							const client = jiraClient.getClient();
+							await client.put(`/rest/api/3/issue/${update.id}`, {
+								fields: requestData.fields
+							});
 
-// 						// Only apply the update if we have fields to update
-// 						if (Object.keys(requestData.fields).length > 0) {
-// 							const client = jiraClient.getClient();
-// 							await client.put(`/rest/api/3/issue/${update.id}`, {
-// 								fields: requestData.fields
-// 							});
+							log.info(
+								`Updated issue ${update.id} fields: ${Object.keys(requestData.fields).join(', ')}`
+							);
+						} else {
+							log.info(`No fields to update for issue ${update.id}`);
+						}
+					} catch (updateError: unknown) {
+						// Log detailed error information
+						const errorMessage = updateError instanceof Error ? updateError.message : String(updateError);
+						log.error(`Error updating issue: ${errorMessage}`);
 
-// 							log.info(
-// 								`Updated issue ${update.id} fields: ${Object.keys(requestData.fields).join(', ')}`
-// 							);
-// 						} else {
-// 							log.info(`No fields to update for issue ${update.id}`);
-// 						}
-// 					} catch (updateError: unknown) {
-// 						// Log detailed error information
-// 						const errorMessage = updateError instanceof Error ? updateError.message : String(updateError);
-// 						log.error(`Error updating issue: ${errorMessage}`);
+						const hasResponse = updateError && typeof updateError === 'object' && 'response' in updateError;
+						if (hasResponse && (updateError as any).response && (updateError as any).response.data) {
+							log.error(
+								`API error details: ${JSON.stringify((updateError as any).response.data)}`
+							);
 
-// 						const hasResponse = updateError && typeof updateError === 'object' && 'response' in updateError;
-// 						if (hasResponse && (updateError as any).response && (updateError as any).response.data) {
-// 							log.error(
-// 								`API error details: ${JSON.stringify((updateError as any).response.data)}`
-// 							);
+							// If there are specific field errors, log them and try again without those fields
+							if ((updateError as any).response.data.errors) {
+								Object.entries((updateError as any).response.data.errors).forEach(
+									([field, error]) => {
+										log.error(`Field error - ${field}: ${String(error)}`);
 
-// 							// If there are specific field errors, log them and try again without those fields
-// 							if ((updateError as any).response.data.errors) {
-// 								Object.entries((updateError as any).response.data.errors).forEach(
-// 									([field, error]) => {
-// 										log.error(`Field error - ${field}: ${String(error)}`);
+										// Remove problematic fields
+										delete requestData.fields[field];
+									}
+								);
 
-// 										// Remove problematic fields
-// 										delete requestData.fields[field];
-// 									}
-// 								);
+								// Retry with remaining fields if any
+								if (Object.keys(requestData.fields).length > 0) {
+									log.info(`Retrying update without problematic fields...`);
+									const client = jiraClient.getClient();
+									await client.put(`/rest/api/3/issue/${update.id}`, {
+										fields: requestData.fields
+									});
+									log.info(
+										`Updated issue ${update.id} with remaining fields: ${Object.keys(requestData.fields).join(', ')}`
+									);
+								}
+							}
+						}
+					}
+				}
 
-// 								// Retry with remaining fields if any
-// 								if (Object.keys(requestData.fields).length > 0) {
-// 									log.info(`Retrying update without problematic fields...`);
-// 									const client = jiraClient.getClient();
-// 									await client.put(`/rest/api/3/issue/${update.id}`, {
-// 										fields: requestData.fields
-// 									});
-// 									log.info(
-// 										`Updated issue ${update.id} with remaining fields: ${Object.keys(requestData.fields).join(', ')}`
-// 									);
-// 								}
-// 							}
-// 						}
-// 					}
-// 				}
+				// Find the original task that matches this update
+				const originalTask = tasks.find(
+					(task) => task.id === update.id || task.jiraKey === update.id
+				);
 
-// 				// Find the original task that matches this update
-// 				const originalTask = tasks.find(
-// 					(task) => task.id === update.id || task.jiraKey === update.id
-// 				);
+				if (!originalTask) {
+					log.error(`Issue ${update.id} not found in tasks array`);
+					continue;
+				}
 
-// 				if (!originalTask) {
-// 					log.error(`Issue ${update.id} not found in tasks array`);
-// 					continue;
-// 				}
+				// Record changes applied
+				const changesApplied = [];
+				if (originalTask.title !== update.title)
+					changesApplied.push({
+						field: 'summary',
+						old: originalTask.title,
+						new: update.title
+					});
+				if (originalTask.description !== update.description)
+					changesApplied.push({
+						field: 'description',
+						old: originalTask.description,
+						new: update.description
+					});
+				if (originalTask.priority !== update.priority)
+					changesApplied.push({
+						field: 'priority',
+						old: originalTask.priority,
+						new: update.priority
+					});
+				if (originalTask.implementationDetails !== update.implementationDetails)
+					changesApplied.push({
+						field: 'implementationDetails',
+						old: originalTask.implementationDetails,
+						new: update.implementationDetails
+					});
+				if (originalTask.acceptanceCriteria !== update.acceptanceCriteria)
+					changesApplied.push({
+						field: 'acceptanceCriteria',
+						old: originalTask.acceptanceCriteria,
+						new: update.acceptanceCriteria
+					});
+				if (originalTask.testStrategyTdd !== update.testStrategyTdd)
+					changesApplied.push({
+						field: 'testStrategy',
+						old: originalTask.testStrategyTdd,
+						new: update.testStrategyTdd
+					});
 
-// 				// Record changes applied
-// 				const changesApplied = [];
-// 				if (originalTask.title !== update.title)
-// 					changesApplied.push({
-// 						field: 'summary',
-// 						old: originalTask.title,
-// 						new: update.title
-// 					});
-// 				if (originalTask.description !== update.description)
-// 					changesApplied.push({
-// 						field: 'description',
-// 						old: originalTask.description,
-// 						new: update.description
-// 					});
-// 				if (originalTask.priority !== update.priority)
-// 					changesApplied.push({
-// 						field: 'priority',
-// 						old: originalTask.priority,
-// 						new: update.priority
-// 					});
-// 				if (originalTask.implementationDetails !== update.implementationDetails)
-// 					changesApplied.push({
-// 						field: 'implementationDetails',
-// 						old: originalTask.implementationDetails,
-// 						new: update.implementationDetails
-// 					});
-// 				if (originalTask.acceptanceCriteria !== update.acceptanceCriteria)
-// 					changesApplied.push({
-// 						field: 'acceptanceCriteria',
-// 						old: originalTask.acceptanceCriteria,
-// 						new: update.acceptanceCriteria
-// 					});
-// 				if (originalTask.testStrategyTdd !== update.testStrategyTdd)
-// 					changesApplied.push({
-// 						field: 'testStrategy',
-// 						old: originalTask.testStrategyTdd,
-// 						new: update.testStrategyTdd
-// 					});
+				// Record updates that were applied
+				updateResults.push({
+					key: update.id,
+					success: true,
+					isSubtask: isSubtask,
+					changeType: changesApplied.map((change) => change.field),
+					changeDetails: changesApplied
+				});
+			} catch (error: unknown) {
+				const errorMessage = error instanceof Error ? error.message : String(error);
+				log.error(`Failed to update issue ${update.id}: ${errorMessage}`);
+				updateResults.push({
+					key: update.id || 'unknown',
+					success: false,
+					error: errorMessage
+				});
+			}
+		}
 
-// 				// Record updates that were applied
-// 				updateResults.push({
-// 					key: update.id,
-// 					success: true,
-// 					isSubtask: isSubtask,
-// 					changeType: changesApplied.map((change) => change.field),
-// 					changeDetails: changesApplied
-// 				});
-// 			} catch (error: unknown) {
-// 				const errorMessage = error instanceof Error ? error.message : String(error);
-// 				log.error(`Failed to update issue ${update.id}: ${errorMessage}`);
-// 				updateResults.push({
-// 					key: update.id || 'unknown',
-// 					success: false,
-// 					error: errorMessage
-// 				});
-// 			}
-// 		}
+		// Return different result formats based on whether it was a single or multiple update
+		if (!isMultipleIssues) {
+			// Single issue update result format (similar to original updateJiraIssueById)
+			const result = updateResults[0] || {
+				success: false,
+				error: { code: 'UPDATE_FAILED', message: 'Failed to update issue' }
+			};
 
-// 		// Return different result formats based on whether it was a single or multiple update
-// 		if (!isMultipleIssues) {
-// 			// Single issue update result format (similar to original updateJiraIssueById)
-// 			const result = updateResults[0] || {
-// 				success: false,
-// 				error: { code: 'UPDATE_FAILED', message: 'Failed to update issue' }
-// 			};
-
-// 			if (result.success) {
-// 				return {
-// 					success: true,
-// 					data: {
-// 						message: `Successfully updated Jira ${result.isSubtask ? 'subtask' : 'issue'} ${result.key} based on the prompt`,
-// 						issueId: result.key,
-// 						isSubtask: result.isSubtask,
-// 						changeType: result.changeType,
-// 						changeDetails: result.changeDetails
-// 					}
-// 				};
-// 			} else {
-// 				return {
-// 					success: false,
-// 					error: {
-// 						code: 'UPDATE_JIRA_ISSUE_ERROR',
-// 						message: result.error
-// 					}
-// 				};
-// 			}
-// 		} else {
-// 			// Multiple issues update result format (similar to original updateJiraTasks)
-// 			const successCount = updateResults.filter((r) => r.success).length;
-// 			return {
-// 				success: successCount > 0,
-// 				message: `Updated ${successCount} out of ${updateResults.length} issues based on the prompt`,
-// 				results: updateResults
-// 			};
-// 		}
-// 	} catch (error: unknown) {
-// 		const errorMessage = error instanceof Error ? error.message : String(error);
-// 		log.error(`Failed to update Jira issue(s): ${errorMessage}`);
-// 		return {
-// 			success: false,
-// 			error: {
-// 				code: 'UPDATE_JIRA_ISSUES_ERROR',
-// 				message: errorMessage
-// 			}
-// 		};
-// 	}
-// }
+			if (result.success) {
+				return {
+					success: true,
+					data: {
+						message: `Successfully updated Jira ${result.isSubtask ? 'subtask' : 'issue'} ${result.key} based on the prompt`,
+						issueId: result.key,
+						isSubtask: result.isSubtask,
+						changeType: result.changeType,
+						changeDetails: result.changeDetails
+					}
+				};
+			} else {
+				return {
+					success: false,
+					error: {
+						code: 'UPDATE_JIRA_ISSUE_ERROR',
+						message: result.error
+					}
+				};
+			}
+		} else {
+			// Multiple issues update result format (similar to original updateJiraTasks)
+			const successCount = updateResults.filter((r) => r.success).length;
+			return {
+				success: successCount > 0,
+				message: `Updated ${successCount} out of ${updateResults.length} issues based on the prompt`,
+				results: updateResults
+			};
+		}
+	} catch (error: unknown) {
+		const errorMessage = error instanceof Error ? error.message : String(error);
+		log.error(`Failed to update Jira issue(s): ${errorMessage}`);
+		return {
+			success: false,
+			error: {
+				code: 'UPDATE_JIRA_ISSUES_ERROR',
+				message: errorMessage
+			}
+		};
+	}
+}
 
 // /**
 //  * Expands a Jira task into multiple subtasks using AI

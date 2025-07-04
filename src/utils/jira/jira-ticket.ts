@@ -812,7 +812,7 @@ export class JiraTicket {
      * @param nodes - Array of ADF nodes
      * @returns Plain text string
      */
-    static extractTextFromNodes(nodes: ADFNode[]): string {
+    static extractTextFromNodes(nodes: ADFNode[], isInlineParagraph = false): string {
         if (!nodes || !Array.isArray(nodes)) {
             return '';
         }
@@ -823,7 +823,8 @@ export class JiraTicket {
             switch (node.type) {
                 case 'paragraph':
                     if (node.content) {
-                        const paragraphText = this.extractTextFromNodes(node.content);
+                        // For paragraph content, join text nodes without line breaks
+                        const paragraphText = this.extractTextFromNodes(node.content, true);
                         if (paragraphText.trim()) {
                             textParts.push(paragraphText);
                         }
@@ -831,13 +832,37 @@ export class JiraTicket {
                     break;
                 case 'text':
                     if (node.text) {
-                        textParts.push(node.text);
+                        let text = node.text;
+                        
+                        // Apply formatting marks
+                        if (node.marks && Array.isArray(node.marks)) {
+                            for (const mark of node.marks) {
+                                switch (mark.type) {
+                                    case 'strong':
+                                        text = `**${text}**`;
+                                        break;
+                                    case 'em':
+                                        text = `*${text}*`;
+                                        break;
+                                    case 'code':
+                                        text = `\`${text}\``;
+                                        break;
+                                    case 'link':
+                                        const href = mark.attrs?.href || '#';
+                                        text = `[${text}](${href})`;
+                                        break;
+                                    // Add other mark types as needed
+                                }
+                            }
+                        }
+                        
+                        textParts.push(text);
                     }
                     break;
                 case 'heading':
                     if (node.content) {
                         const level = node.attrs?.level || 1;
-                        const headingText = this.extractTextFromNodes(node.content);
+                        const headingText = this.extractTextFromNodes(node.content, true);
                         const headerPrefix = '#'.repeat(level);
                         textParts.push(`${headerPrefix} ${headingText}`);
                     }
@@ -846,7 +871,8 @@ export class JiraTicket {
                     if (node.content) {
                         for (const listItem of node.content) {
                             if (listItem.type === 'listItem' && listItem.content) {
-                                const itemText = this.extractTextFromNodes(listItem.content);
+                                // List item content should be treated as a single line
+                                const itemText = this.extractTextFromNodes(listItem.content, true);
                                 if (itemText.trim()) {
                                     textParts.push(`- ${itemText}`);
                                 }
@@ -859,7 +885,8 @@ export class JiraTicket {
                         for (let i = 0; i < node.content.length; i++) {
                             const listItem = node.content[i];
                             if (listItem.type === 'listItem' && listItem.content) {
-                                const itemText = this.extractTextFromNodes(listItem.content);
+                                // List item content should be treated as a single line
+                                const itemText = this.extractTextFromNodes(listItem.content, true);
                                 if (itemText.trim()) {
                                     textParts.push(`${i + 1}. ${itemText}`);
                                 }
@@ -867,9 +894,24 @@ export class JiraTicket {
                         }
                     }
                     break;
+                case 'taskList':
+                    if (node.content) {
+                        for (const taskItem of node.content) {
+                            if (taskItem.type === 'taskItem' && taskItem.content) {
+                                // Convert task item to checkbox based on state
+                                const itemText = this.extractTextFromNodes(taskItem.content, true);
+                                if (itemText.trim()) {
+                                    const isChecked = taskItem.attrs?.state === 'DONE';
+                                    const checkbox = isChecked ? '[x]' : '[ ]';
+                                    textParts.push(`- ${checkbox} ${itemText}`);
+                                }
+                            }
+                        }
+                    }
+                    break;
                 case 'codeBlock':
                     if (node.content) {
-                        const codeText = this.extractTextFromNodes(node.content);
+                        const codeText = this.extractTextFromNodes(node.content, true);
                         const language = node.attrs?.language || '';
                         textParts.push(`\`\`\`${language}\n${codeText}\n\`\`\``);
                     }
@@ -885,7 +927,31 @@ export class JiraTicket {
             }
         }
 
-        return textParts.join('\n\n').trim();
+        // If we're processing inline paragraph content, join without line breaks
+        // Otherwise, join with appropriate line breaks for block-level elements
+        if (isInlineParagraph) {
+            return textParts.join('');
+        } else {
+            // For block-level elements, we need to be smarter about spacing
+            // List items should be separated by single newlines, other blocks by double newlines
+            let result = '';
+            for (let i = 0; i < textParts.length; i++) {
+                const part = textParts[i];
+                if (i > 0) {
+                    // If current or previous part is a list item, use single newline
+                    const isCurrentListItem = part.startsWith('- ') || /^\d+\. /.test(part);
+                    const isPreviousListItem = textParts[i - 1].startsWith('- ') || /^\d+\. /.test(textParts[i - 1]);
+                    
+                    if (isCurrentListItem || isPreviousListItem) {
+                        result += '\n';
+                    } else {
+                        result += '\n\n';
+                    }
+                }
+                result += part;
+            }
+            return result.trim();
+        }
     }
 
     /**
@@ -1151,4 +1217,85 @@ export class JiraTicket {
 
         return ticket;
     }
-} 
+
+    /**
+     * Convert the ticket to markdown format for LLM processing
+     * @returns Markdown representation of the ticket
+     */
+    toMarkdown(): string {
+        let markdown = '';
+        
+        // Title
+        if (this.title) {
+            markdown += `## Title\n${this.title}\n\n`;
+        }
+        
+        // Description
+        if (this.description) {
+            markdown += `## Description\n${this.description}\n\n`;
+        }
+        
+        // Implementation Details
+        if (this.details) {
+            markdown += `## Implementation Details\n${this.details}\n\n`;
+        }
+        
+        // Acceptance Criteria
+        if (this.acceptanceCriteria) {
+            markdown += `## Acceptance Criteria\n${this.acceptanceCriteria}\n\n`;
+        }
+        
+        // Test Strategy
+        if (this.testStrategy) {
+            markdown += `## Test Strategy (TDD)\n${this.testStrategy}\n\n`;
+        }
+        
+        return markdown.trim();
+    }
+
+    /**
+     * Create a JiraTicket from markdown format
+     * @param markdown - Markdown representation of the ticket
+     * @returns New JiraTicket instance
+     */
+    static fromMarkdown(markdown: string): JiraTicket {
+        const sections: { [key: string]: string } = {};
+        
+        // Split markdown into sections
+        const lines = markdown.split('\n');
+        let currentSection = '';
+        let currentContent: string[] = [];
+        
+        for (const line of lines) {
+            // Check if this is a section header
+            if (line.startsWith('## ')) {
+                // Save previous section if it exists
+                if (currentSection && currentContent.length > 0) {
+                    sections[currentSection] = currentContent.join('\n').trim();
+                }
+                
+                // Start new section
+                currentSection = line.slice(3).trim().toLowerCase();
+                currentContent = [];
+            } else if (currentSection) {
+                // Add line to current section
+                currentContent.push(line);
+            }
+        }
+        
+        // Save final section
+        if (currentSection && currentContent.length > 0) {
+            sections[currentSection] = currentContent.join('\n').trim();
+        }
+        
+        // Map sections to ticket properties
+        return new JiraTicket({
+            title: sections['title'] || '',
+            description: sections['description'] || '',
+            details: sections['implementation details'] || '',
+            acceptanceCriteria: sections['acceptance criteria'] || '',
+            testStrategy: sections['test strategy (tdd)'] || sections['test strategy'] || ''
+        });
+    }
+
+    } 
