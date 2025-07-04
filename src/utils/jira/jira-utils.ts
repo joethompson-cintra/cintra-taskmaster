@@ -803,10 +803,13 @@ export async function fetchTasksFromJira(parentKey: string | null, withSubtasks:
  * @param {Object} log - Logger object
  * @returns {Promise<Object>} Result object with success status and data/error
  */
-export async function createJiraIssue(jiraTicket: any, log: Logger): Promise<any> {
+export async function createJiraIssue(jiraTicket: any, options: FetchOptions = {}): Promise<any> {
+	const { jiraConfig, log } = options;
+	
 	try {
+
 		// Check if Jira is enabled using the JiraClient
-		const jiraClient = new JiraClient();
+		const jiraClient = new JiraClient(jiraConfig);
 
 		if (!jiraClient.isReady()) {
 			return {

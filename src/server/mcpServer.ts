@@ -4,6 +4,7 @@ import { logger } from '../utils/logger';
 import { registerGetTaskTool } from './tools/get-task';
 import { registerNextTaskTool } from './tools/next-task';
 import { registerSetTaskStatusTool } from './tools/set-task-status';
+import { registerAddTaskTool } from './tools/add-task';
 
 export function setupMcpServer(server: McpServer, getSessionConfig?: () => any): void {
     try {
@@ -11,6 +12,7 @@ export function setupMcpServer(server: McpServer, getSessionConfig?: () => any):
         registerGetTaskTool(server, getSessionConfig);
         registerNextTaskTool(server, getSessionConfig);
         registerSetTaskStatusTool(server, getSessionConfig);
+        registerAddTaskTool(server, getSessionConfig);
 
     } catch (error: any) {
         logger.error(`Error registering Task Master tools: ${error.message}`);
