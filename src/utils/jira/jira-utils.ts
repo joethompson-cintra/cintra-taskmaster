@@ -3202,21 +3202,6 @@ export async function addContextToTask(
 	try {
 		log.info(`Starting addContextToTask for ticket ${ticketId}`);
 		
-		// Log the incoming configurations
-		log.info('addContextToTask received jiraConfig:', {
-			provided: !!jiraConfig,
-			baseUrl: jiraConfig?.baseUrl || 'MISSING',
-			hasEmail: !!jiraConfig?.email,
-			hasToken: !!jiraConfig?.apiToken,
-			project: jiraConfig?.project || 'MISSING'
-		});
-		
-		log.info('addContextToTask received bitbucketConfig:', {
-			provided: !!bitbucketConfig,
-			workspace: bitbucketConfig?.workspace || 'MISSING',
-			hasUsername: !!bitbucketConfig?.username,
-			hasToken: !!bitbucketConfig?.apiToken
-		});
 
 		// Check if context services are available
 		const jiraClient = new JiraClient(jiraConfig);
@@ -3233,7 +3218,10 @@ export async function addContextToTask(
 				hasProject: !!jiraClient.config.project,
 				baseUrl: jiraClient.config.baseUrl,
 				email: jiraClient.config.email,
-				project: jiraClient.config.project
+				project: jiraClient.config.project,
+				workspace: bitbucketConfig.workspace || 'MISSING',
+				hasUsername: !!bitbucketConfig.username,
+				hasBitbucketApiToken: !!bitbucketConfig.apiToken,
 			}
 		});
 		
@@ -3245,21 +3233,6 @@ export async function addContextToTask(
 		}
 
 		const bitbucketClient = new BitbucketClient(bitbucketConfig);
-		
-		// Log detailed Bitbucket client state
-		log.info('Created BitbucketClient in addContextToTask:', {
-			enabled: bitbucketClient.enabled,
-			hasClient: !!bitbucketClient.client,
-			error: bitbucketClient.error,
-			config: {
-				hasWorkspace: !!bitbucketClient.config.workspace,
-				hasUsername: !!bitbucketClient.config.username,
-				hasApiToken: !!bitbucketClient.config.apiToken,
-				workspace: bitbucketClient.config.workspace,
-				username: bitbucketClient.config.username
-			}
-		});
-		
 		if (!bitbucketClient.enabled) {
 			log.info('Bitbucket client not enabled in addContextToTask, skipping context');
 			const validation = bitbucketClient.validateConfig(log);
