@@ -9,6 +9,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp';
 import { logger } from '../../utils/logger';
 import { fetchJiraTaskDetails } from '../../utils/jira/jira-utils';
 import { createErrorResponse } from '../../utils/utils';
+import { useSessionConfigs } from '../../utils/config';
 
 export function registerGetTaskTool(server: McpServer, getSessionConfig?: () => any): void {
 
@@ -62,36 +63,8 @@ export function registerGetTaskTool(server: McpServer, getSessionConfig?: () => 
         maxRelatedTickets?: number;
     }) => {
         try {
-            // Get session-specific config if available
-            const sessionConfig = getSessionConfig ? getSessionConfig() : {};
-
-            // Use session config for Jira credentials
-            const jiraConfig = {
-                baseUrl: process.env.JIRA_API_URL,
-                email: sessionConfig.JIRA_EMAIL,
-                apiToken: sessionConfig.JIRA_API_TOKEN,
-                project: sessionConfig.JIRA_PROJECT,
-            };
-
-            // Use session config for Bitbucket credentials
-            const bitbucketConfig = {
-                workspace: process.env.BITBUCKET_WORKSPACE,
-                username: sessionConfig.BITBUCKET_EMAIL,
-                apiToken: sessionConfig.BITBUCKET_API_TOKEN,
-            };
-
-            logger.info('Final Jira config:', {
-                baseUrl: jiraConfig.baseUrl ? jiraConfig.baseUrl : 'MISSING',
-                hasEmail: !!jiraConfig.email,
-                hasToken: !!jiraConfig.apiToken,
-                project: jiraConfig.project || 'MISSING'
-            });
-
-            logger.info('Final Bitbucket config:', {
-                workspace: bitbucketConfig.workspace || 'MISSING',
-                hasUsername: !!bitbucketConfig.username,
-                hasToken: !!bitbucketConfig.apiToken
-            });
+            // Get configurations using the shared config hook
+            const { jiraConfig, bitbucketConfig } = useSessionConfigs(getSessionConfig, logger);
 
             // Destructure args with defaults (inlined from showJiraTaskDirect)
             const {

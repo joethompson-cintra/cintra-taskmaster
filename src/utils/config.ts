@@ -1,44 +1,130 @@
-import { z } from 'zod';
-import { logger } from './logger.js';
+import { Logger } from '../types/jira';
 
-// Define the schema for optional environment variables
-const envSchema = z.object({
-    NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
-    PORT: z.string().regex(/^\d+$/).transform(Number).default('3000'),
-    
-    // Optional configuration
-    ALLOWED_ORIGINS: z.string().optional(),
-    LOG_LEVEL: z.enum(['error', 'warn', 'info', 'debug']).default('info')
-});
+export interface SessionConfig {
+    JIRA_EMAIL?: string;
+    JIRA_API_TOKEN?: string;
+    JIRA_PROJECT?: string;
+    BITBUCKET_EMAIL?: string;
+    BITBUCKET_API_TOKEN?: string;
+    [key: string]: any;
+}
 
-export type Config = z.infer<typeof envSchema>;
+export interface JiraConfig {
+    baseUrl?: string;
+    email?: string;
+    apiToken?: string;
+    project?: string;
+}
 
-export function validateEnvironment(): Config {
-    try {
-        const config = envSchema.parse(process.env);
-        logger.info('Environment variables validated successfully');
-        return config;
-    } catch (error) {
-        logger.error('Environment validation failed:', error);
-        
-        if (error instanceof z.ZodError) {
-            const missingVars = error.issues.map(issue => 
-                `${issue.path.join('.')}: ${issue.message}`
-            ).join('\n');
-            
-            logger.error('Missing or invalid environment variables:\n' + missingVars);
-            logger.error('Please check your .env file and ensure all required variables are set');
+export interface BitbucketConfig {
+    workspace?: string;
+    username?: string;
+    apiToken?: string;
+}
+
+export interface ConfigResult {
+    jiraConfig: JiraConfig;
+    bitbucketConfig: BitbucketConfig;
+}
+
+/**
+ * Extracts and validates Jira and Bitbucket configurations from session
+ * @param getSessionConfig - Function to get session configuration
+ * @param logger - Logger instance for debugging
+ * @param options - Configuration options
+ * @returns Object containing jiraConfig and bitbucketConfig
+ */
+export function useSessionConfigs(
+    getSessionConfig?: () => SessionConfig,
+    logger?: Logger,
+    options: {
+        includeJira?: boolean;
+        includeBitbucket?: boolean;
+        logConfigs?: boolean;
+    } = {}
+): ConfigResult {
+    const {
+        includeJira = true,
+        includeBitbucket = true,
+        logConfigs = true
+    } = options;
+
+    // Get session-specific config if available
+    const sessionConfig = getSessionConfig ? getSessionConfig() : {};
+
+    // Build Jira configuration
+    const jiraConfig: JiraConfig = includeJira ? {
+        baseUrl: process.env.JIRA_API_URL,
+        email: sessionConfig.JIRA_EMAIL,
+        apiToken: sessionConfig.JIRA_API_TOKEN,
+        project: sessionConfig.JIRA_PROJECT,
+    } : {};
+
+    // Build Bitbucket configuration
+    const bitbucketConfig: BitbucketConfig = includeBitbucket ? {
+        workspace: process.env.BITBUCKET_WORKSPACE,
+        username: sessionConfig.BITBUCKET_EMAIL,
+        apiToken: sessionConfig.BITBUCKET_API_TOKEN,
+    } : {};
+
+    // Log configurations if requested and logger is available
+    if (logConfigs && logger) {
+        if (includeJira) {
+            logger.info('Final Jira config:', {
+                baseUrl: jiraConfig.baseUrl ? jiraConfig.baseUrl : 'MISSING',
+                hasEmail: !!jiraConfig.email,
+                hasToken: !!jiraConfig.apiToken,
+                project: jiraConfig.project || 'MISSING'
+            });
         }
-        
-        process.exit(1);
+
+        if (includeBitbucket) {
+            logger.info('Final Bitbucket config:', {
+                workspace: bitbucketConfig.workspace || 'MISSING',
+                hasUsername: !!bitbucketConfig.username,
+                hasToken: !!bitbucketConfig.apiToken
+            });
+        }
     }
+
+    return {
+        jiraConfig,
+        bitbucketConfig
+    };
 }
 
-export function getConfig(): Config {
-    return envSchema.parse(process.env);
+/**
+ * Convenience function for tools that only need Jira configuration
+ * @param getSessionConfig - Function to get session configuration
+ * @param logger - Logger instance for debugging
+ * @returns Jira configuration object
+ */
+export function useJiraConfig(
+    getSessionConfig?: () => SessionConfig,
+    logger?: Logger
+): JiraConfig {
+    const { jiraConfig } = useSessionConfigs(getSessionConfig, logger, {
+        includeJira: true,
+        includeBitbucket: false,
+        logConfigs: true
+    });
+    return jiraConfig;
 }
 
-// Export commonly used config values
-export const isDevelopment = () => process.env.NODE_ENV === 'development';
-export const isProduction = () => process.env.NODE_ENV === 'production';
-export const isTest = () => process.env.NODE_ENV === 'test'; 
+/**
+ * Convenience function for tools that only need Bitbucket configuration
+ * @param getSessionConfig - Function to get session configuration
+ * @param logger - Logger instance for debugging
+ * @returns Bitbucket configuration object
+ */
+export function useBitbucketConfig(
+    getSessionConfig?: () => SessionConfig,
+    logger?: Logger
+): BitbucketConfig {
+    const { bitbucketConfig } = useSessionConfigs(getSessionConfig, logger, {
+        includeJira: false,
+        includeBitbucket: true,
+        logConfigs: true
+    });
+    return bitbucketConfig;
+} 

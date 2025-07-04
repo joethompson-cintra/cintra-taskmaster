@@ -35,6 +35,12 @@ function extractCredentials(req: Request) {
 
 // Handle POST requests for client-to-server communication
 app.post('/mcp', async (req: Request, res: Response) => {
+	logger.info('POST /mcp received', {
+		contentType: req.headers['content-type'],
+		accept: req.headers['accept'],
+		method: req.body?.method,
+		hasBody: !!req.body
+	});
 	try {
 		// Check for existing session ID
 		const sessionId = req.headers['mcp-session-id'] as string | undefined;
@@ -94,6 +100,12 @@ app.post('/mcp', async (req: Request, res: Response) => {
 		} else {
 			// Invalid request
 			logger.info('Invalid request: no session ID and not an initialize request');
+			logger.info('Request details:', {
+				sessionId: sessionId,
+				method: req.body?.method,
+				isInitializeRequest: isInitializeRequest(req.body),
+				requestBody: JSON.stringify(req.body, null, 2)
+			});
 			res.status(400).json({
 				jsonrpc: '2.0',
 				error: {
@@ -107,7 +119,14 @@ app.post('/mcp', async (req: Request, res: Response) => {
 
 		// Handle the request
 		logger.info(`Handling request for session: ${transport.sessionId}`);
-		await transport.handleRequest(req, res, req.body);
+		logger.info('About to call transport.handleRequest');
+		try {
+			await transport.handleRequest(req, res, req.body);
+			logger.info('transport.handleRequest completed successfully');
+		} catch (error) {
+			logger.error('Error in transport.handleRequest:', error);
+			throw error;
+		}
 	} catch (error) {
 		logger.error('Error in POST /mcp:', error);
 		if (!res.headersSent) {

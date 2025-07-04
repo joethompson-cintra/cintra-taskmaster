@@ -1216,10 +1216,16 @@ export async function setJiraTaskStatus(taskId: string, newStatus: string, optio
  * @param {Object} log - Logger object
  * @returns {Promise<Object>} The next task to work on and all retrieved tasks
  */
-export async function findNextJiraTask(parentKey: string, log: Logger): Promise<any> {
+export async function findNextJiraTask(
+	parentKey: string,
+	log: Logger,
+	options: FetchOptions = {}
+): Promise<any> {
 	try {
+		const { jiraConfig } = options;
+
 		// Check if Jira is enabled using the JiraClient
-		const jiraClient = new JiraClient();
+		const jiraClient = new JiraClient(jiraConfig);
 
 		if (!jiraClient.isReady()) {
 			return {
@@ -1237,7 +1243,7 @@ export async function findNextJiraTask(parentKey: string, log: Logger): Promise<
 		if (parentKey) {
 			log.info(`Finding next task for parent/epic: ${parentKey}`);
 		} else {
-			log.info('No parent key provided, fetching all pending tasks');
+			log.info('No parent key provided, fetching all workable tasks');
 		}
 
 		// Get tasks using fetchTasksFromJira - whether filtering by parent or getting all tasks
@@ -1266,15 +1272,14 @@ export async function findNextJiraTask(parentKey: string, log: Logger): Promise<
 				.map((t: any) => t.id)
 		);
 
-		// Filter for tasks that are ready to be worked on (excluding in-review, completed, or blocked states)
+		// Filter for tasks that are ready to be worked on or currently being worked on
 		const eligibleTasks = allTasks.filter(
 			(task: any) => {
-				// Only include tasks that are truly available to start work on
-				const isAvailableStatus = task.status === 'pending' || task.status === 'to-do';
-				// Exclude tasks that are in review, completed, blocked, or in progress
-				const isNotInActiveOrCompletedState = !['in-review', 'done', 'completed', 'in-progress', 'blocked', 'deferred', 'cancelled'].includes(task.status);
+				// Include tasks that are available to work on (pending, to-do) or currently being worked on (in-progress)
+				// Exclude in-review tasks as they're waiting for review feedback
+				const isWorkableStatus = ['pending', 'to-do', 'in-progress'].includes(task.status);
 				
-				return isAvailableStatus && isNotInActiveOrCompletedState && (
+				return isWorkableStatus && (
 					!task.dependencies || // No dependencies, or
 					task.dependencies.length === 0 || // Empty dependencies array, or
 					task.dependencies.every((depId: any) => completedTaskIds.has(depId)) // All dependencies completed
@@ -1284,7 +1289,7 @@ export async function findNextJiraTask(parentKey: string, log: Logger): Promise<
 
 		if (eligibleTasks.length === 0) {
 			log.info(
-				'No eligible tasks found - all tasks are either completed or have unsatisfied dependencies'
+				'No eligible tasks found - all tasks are either completed, blocked, in review, or have unsatisfied dependencies'
 			);
 			return {
 				success: true,
@@ -1295,13 +1300,23 @@ export async function findNextJiraTask(parentKey: string, log: Logger): Promise<
 		}
 
 		// Sort eligible tasks by:
-		// 1. Priority (high > medium > low)
-		// 2. Dependencies count (fewer dependencies first)
-		// 3. ID (lower ID first)
+		// 1. Status (in-progress first, then pending/to-do)
+		// 2. Priority (high > medium > low)
+		// 3. Dependencies count (fewer dependencies first)
+		// 4. ID (lower ID first)
 		const priorityValues = { high: 3, medium: 2, low: 1 };
+		const statusValues = { 'in-progress': 3, 'pending': 2, 'to-do': 1 };
 
 		const nextTask = eligibleTasks.sort((a: any, b: any) => {
-			// Sort by priority first
+			// Sort by status first - prioritize in-progress tasks
+			const statusA = statusValues[a.status as keyof typeof statusValues] || 1;
+			const statusB = statusValues[b.status as keyof typeof statusValues] || 1;
+
+			if (statusB !== statusA) {
+				return statusB - statusA; // Higher status value first (in-progress > pending > to-do)
+			}
+
+			// If status is the same, sort by priority
 			const priorityA = priorityValues[a.priority as keyof typeof priorityValues || 'medium'] || 2;
 			const priorityB = priorityValues[b.priority as keyof typeof priorityValues || 'medium'] || 2;
 

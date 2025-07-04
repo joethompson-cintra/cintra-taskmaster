@@ -1088,7 +1088,9 @@ export class JiraTicket {
         // Map common Jira statuses to Task Master statuses
         if (statusName.includes('done') || statusName.includes('closed') || statusName.includes('resolved')) {
             return 'done';
-        } else if (statusName.includes('progress') || statusName.includes('development') || statusName.includes('review')) {
+        } else if (statusName.includes('review')) {
+            return 'in-review';
+        } else if (statusName.includes('progress') || statusName.includes('development')) {
             return 'in-progress';
         } else {
             return 'pending';
