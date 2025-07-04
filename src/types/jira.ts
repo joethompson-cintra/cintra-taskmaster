@@ -532,11 +532,6 @@ export interface ValidationErrors {
     warnings: string[];
 }
 
-// Additional Options interfaces for jira-utils functions
-export interface SetTaskStatusOptions {
-    mcpLog?: Logger;
-}
-
 export interface FindNextTaskOptions {
     mcpLog?: Logger;
 }

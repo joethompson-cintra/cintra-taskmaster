@@ -15,11 +15,6 @@ import { PRTicketMatcher } from '../bitbucket/pr-ticket-matcher';
 import {
 	Logger,
 	FetchOptions,
-	SetTaskStatusOptions,
-	UpdateIssuesOptions,
-	ExpandTaskOptions,
-	GenerateSubtasksOptions,
-	AnalyzeComplexityOptions,
 	CompressionResult,
 } from '../../types/jira';
 
@@ -1114,27 +1109,14 @@ function getFieldErrorSuggestion(field: string, message: string, jiraTicket: any
  * @param {Object} options - Additional options (mcpLog for MCP mode)
  * @returns {Promise<Object>} Result object with success status and data/error
  */
-export async function setJiraTaskStatus(taskId: string, newStatus: string, options: SetTaskStatusOptions = {}): Promise<any> {
+export async function setJiraTaskStatus(taskId: string, newStatus: string, options: FetchOptions = {}): Promise<any> {
 	try {
-		// Get logger from options or use silent logger for MCP compatibility
-		const log = options.mcpLog || {
-			info: () => {},
-			warn: () => {},
-			error: () => {},
-			debug: () => {}
-		} as Logger;
+		const { jiraConfig, log } = options;
 
-		// Determine if we're in MCP mode by checking for mcpLog
-		const isMcpMode = !!options?.mcpLog;
-
-		// Only display UI elements if not in MCP mode
-		if (!isMcpMode) {
-			// Skip UI elements that would break JSON output
-			log.info(`Updating Jira task ${taskId} status to: ${newStatus}`);
-		}
+		log.info(`Updating Jira task ${taskId} status to: ${newStatus}`);
 
 		// Check if Jira is enabled using the JiraClient
-		const jiraClient = new JiraClient();
+		const jiraClient = new JiraClient(jiraConfig);
 
 		if (!jiraClient.isReady()) {
 			return {
@@ -1194,8 +1176,8 @@ export async function setJiraTaskStatus(taskId: string, newStatus: string, optio
 		const errorMessage = error instanceof Error ? error.message : String(error);
 		const fullErrorMessage = `Error setting Jira task status: ${errorMessage}`;
 
-		if (options.mcpLog) {
-			options.mcpLog.error(fullErrorMessage);
+		if (options.log) {
+			options.log.error(fullErrorMessage);
 		}
 		// Don't use console.error in MCP mode as it breaks the JSON protocol
 
