@@ -72,14 +72,6 @@ docker-compose logs -f cintra-taskmaster
 docker-compose down
 ```
 
-### Production Mode
-```bash
-# Run with nginx reverse proxy
-docker-compose --profile production up -d
-
-# This will also start nginx on ports 80/443
-```
-
 ## Build Only Docker Image
 
 If you prefer to build just the Docker image:
@@ -178,39 +170,6 @@ Run with debug logging:
 # Enable debug logging
 docker-compose up -e LOG_LEVEL=debug
 ```
-
-## Production Deployment
-
-For production deployment with SSL:
-
-1. **Create nginx configuration** (nginx.conf):
-   ```nginx
-   events {
-       worker_connections 1024;
-   }
-   
-   http {
-       upstream mcp-server {
-           server cintra-taskmaster:3000;
-       }
-       
-       server {
-           listen 80;
-           server_name your-domain.com;
-           
-           location / {
-               proxy_pass http://mcp-server;
-               proxy_set_header Host $host;
-               proxy_set_header X-Real-IP $remote_addr;
-           }
-       }
-   }
-   ```
-
-2. **Deploy with production profile**:
-   ```bash
-   docker-compose --profile production up -d
-   ```
 
 ## Testing
 
