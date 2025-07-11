@@ -1,43 +1,56 @@
-# Use Node.js 18 Alpine as base image
-FROM node:18-alpine
+# Use Node.js 20 Alpine for better security and performance
+FROM node:20-alpine
 
 # Set working directory
 WORKDIR /app
 
-# Install dependencies for building native modules
-RUN apk add --no-cache python3 make g++
+# Install dependencies for building native modules and curl for health checks
+RUN apk add --no-cache \
+    python3 \
+    make \
+    g++ \
+    curl \
+    dumb-init
 
-# Copy package files
+# Copy package files first (better Docker layer caching)
 COPY package*.json ./
 
-# Install dependencies
-RUN npm ci --only=production
+# Install ALL dependencies first (including dev dependencies for building)
+RUN npm ci && npm cache clean --force
 
 # Copy source code
-COPY . .
+COPY src/ ./src/
+COPY tsconfig.json ./
 
-# Build TypeScript
+# Build TypeScript to JavaScript
 RUN npm run build
 
-# Create logs directory
-RUN mkdir -p logs
+# Remove source TypeScript files and reinstall only production dependencies
+RUN rm -rf src/ tsconfig.json node_modules/
+RUN npm ci --only=production && npm cache clean --force
 
-# Create non-root user
-RUN addgroup -g 1001 -S nodejs
-RUN adduser -S mcpserver -u 1001
+# Create logs directory with proper permissions
+RUN mkdir -p logs && chmod 755 logs
 
-# Change ownership of app directory
-RUN chown -R mcpserver:nodejs /app
+# Create non-root user for security
+RUN addgroup -g 1001 -S mcpuser && \
+    adduser -S mcpuser -u 1001 -G mcpuser
+
+# Change ownership of app directory to non-root user
+RUN chown -R mcpuser:mcpuser /app
 
 # Switch to non-root user
-USER mcpserver
+USER mcpuser
 
-# Expose port
+# Expose port (configurable via environment variable)
 EXPOSE 3000
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD node -e "require('http').get('http://localhost:3000/health', (res) => { process.exit(res.statusCode === 200 ? 0 : 1); }).on('error', () => process.exit(1));"
+# Health check using the actual health endpoint
+HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
+    CMD curl -f http://localhost:3000/health || exit 1
 
-# Start the server
+# Use dumb-init for proper signal handling
+ENTRYPOINT ["dumb-init", "--"]
+
+# Start the MCP server
 CMD ["npm", "start"] 
