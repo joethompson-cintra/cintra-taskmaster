@@ -6,6 +6,10 @@ import { registerNextTaskTool } from './tools/next-task';
 import { registerSetTaskStatusTool } from './tools/set-task-status';
 import { registerAddTaskTool } from './tools/add-task';
 import { registerUpdateTaskTool } from './tools/update-task';
+import { registerRemoveTaskTool } from './tools/remove-task';
+import { registerAddJiraCommentTool } from './tools/add-jira-comment';
+import { registerGetJiraAttachmentTool } from './tools/get-jira-attachment';
+import { registerExpandJiraTaskTool } from './tools/expand-jira-task';
 
 export function setupMcpServer(server: McpServer, getSessionConfig?: () => any): void {
     try {
@@ -15,6 +19,10 @@ export function setupMcpServer(server: McpServer, getSessionConfig?: () => any):
         registerSetTaskStatusTool(server, getSessionConfig);
         registerAddTaskTool(server, getSessionConfig);
         registerUpdateTaskTool(server, getSessionConfig);
+        registerRemoveTaskTool(server, getSessionConfig);
+        registerAddJiraCommentTool(server, getSessionConfig);
+        registerGetJiraAttachmentTool(server, getSessionConfig);
+        registerExpandJiraTaskTool(server, getSessionConfig);
 
     } catch (error: any) {
         logger.error(`Error registering Task Master tools: ${error.message}`);

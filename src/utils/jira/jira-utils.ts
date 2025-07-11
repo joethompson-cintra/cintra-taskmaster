@@ -1727,259 +1727,218 @@ The changes described in the prompt should be applied to ALL tasks in the list. 
 	}
 }
 
-// /**
-//  * Expands a Jira task into multiple subtasks using AI
-//  * @param {string} taskId - The Jira issue key to expand
-//  * @param {number} [numSubtasks] - Number of subtasks to generate (default based on env var)
-//  * @param {boolean} [useResearch=false] - Enable Perplexity AI for research-backed subtask generation
-//  * @param {string} [additionalContext=''] - Additional context to guide subtask generation
-//  * @param {Object} options - Options object containing session and logging info
-//  * @param {Object} [options.mcpLog] - Logger object for MCP mode
-//  * @param {Object} [options.session] - Session object for AI clients
-//  * @param {boolean} [options.force=false] - Force regeneration of subtasks
-//  * @returns {Promise<{success: boolean, data: Object, error: Object}>} Result of the expansion
-//  */
-// export async function expandJiraTask(
-// 	taskId: string,
-// 	numSubtasks: number,
-// 	useResearch: boolean = false,
-// 	additionalContext: string = '',
-// 	options: ExpandTaskOptions = {}
-// ): Promise<any> {
-// 	// Destructure options object
-// 	const { reportProgress, mcpLog, session, force = false } = options;
+/**
+ * Expands a Jira task into multiple subtasks using AI
+ * @param {string} taskId - The Jira issue key to expand
+ * @param {number} [numSubtasks] - Number of subtasks to generate (default based on env var)
+ * @param {boolean} [useResearch=false] - Enable Perplexity AI for research-backed subtask generation
+ * @param {string} [additionalContext=''] - Additional context to guide subtask generation
+ * @param {Object} options - Options object containing session and logging info
+ * @param {Object} [options.jiraConfig] - Jira configuration for the session
+ * @param {Object} [options.log] - Logger object for MCP mode
+ * @param {boolean} [options.force=false] - Force regeneration of subtasks
+ * @returns {Promise<{success: boolean, data: Object, error: Object}>} Result of the expansion
+ */
+export async function expandJiraTask(
+	taskId: string,
+	numSubtasks?: number,
+	useResearch: boolean = false,
+	additionalContext: string = '',
+	options: FetchOptions & { force?: boolean } = {}
+): Promise<any> {
+	// Destructure options object
+	const { jiraConfig, log, force = false } = options;
 
-// 	// Determine output format based on mcpLog presence (simplification)
-// 	const outputFormat = mcpLog ? 'json' : 'text';
+	try {
+		log?.info(`Expanding task ${taskId}`);
 
-// 	// Create custom reporter that checks for MCP log and silent mode
-// 	const report = (message: string, level: string = 'info') => {
-// 		if (mcpLog) {
-// 			if (level === 'info') mcpLog.info(message);
-// 			else if (level === 'warn') mcpLog.warn(message);
-// 			else if (level === 'error') mcpLog.error(message);
-// 			else if (level === 'debug') mcpLog.debug(message);
-// 		} else if (!isSilentMode() && outputFormat === 'text') {
-// 			// Only log to console if not in silent mode and outputFormat is 'text'
-// 			log(level, message);
-// 		}
-// 	};
+		// Get task details
+		const taskDetails = await fetchJiraTaskDetails(taskId, true, log!, { jiraConfig });
+		if (!taskDetails.success) {
+			throw new Error(
+				`Failed to fetch Jira task: ${taskDetails.error?.message || 'Unknown error'}`
+			);
+		}
 
-// 	// Keep the mcpLog check for specific MCP context logging
-// 	if (mcpLog) {
-// 		mcpLog.info(
-// 			`expandTask - reportProgress available: ${!!reportProgress}, session available: ${!!session}`
-// 		);
-// 	}
+		const task = taskDetails.data.task;
 
-// 	try {
-// 		report(`Expanding task ${taskId}`);
+		// Check if the task already has subtasks and force isn't enabled
+		const hasExistingSubtasks = task.subtasks && task.subtasks.length > 0;
+		if (hasExistingSubtasks && !force) {
+			log?.info(`Task ${taskId} already has ${task.subtasks.length} subtasks`);
+			return {
+				success: true,
+				data: {
+					message: `Task ${taskId} already has subtasks. Expansion skipped.`,
+					task,
+					subtasksCount: task.subtasks.length,
+					subtasks: task.subtasks
+				}
+			};
+		}
 
-// 		// Get task details
-// 		const fallbackLogger = { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} } as Logger;
-// 		const taskDetails = await fetchJiraTaskDetails(taskId, true, mcpLog || fallbackLogger);
-// 		if (!taskDetails.success) {
-// 			throw new Error(
-// 				`Failed to fetch Jira task: ${taskDetails.error?.message || 'Unknown error'}`
-// 			);
-// 		}
+		// Calculate the number of subtasks to generate
+		const defaultSubtasksCount = parseInt(
+			process.env.DEFAULT_SUBTASKS || '3',
+			10
+		);
+		const subtasksToGenerate = numSubtasks || defaultSubtasksCount;
 
-// 		const task = taskDetails.data.task;
+		log?.info(`Generating ${subtasksToGenerate} subtasks for Jira task ${taskId}`);
 
-// 		// Check if the task already has subtasks and force isn't enabled
-// 		const hasExistingSubtasks = task.subtasks && task.subtasks.length > 0;
-// 		if (hasExistingSubtasks && !force) {
-// 			report(`Task ${taskId} already has ${task.subtasks.length} subtasks`);
-// 			return {
-// 				success: true,
-// 				message: `Task ${taskId} already has subtasks. Expansion skipped.`,
-// 				task,
-// 				subtasksCount: task.subtasks.length,
-// 				subtasks: task.subtasks
-// 			};
-// 		}
+		// Generate subtasks with the AI service
+		const generatedSubtasks = await generateSubtasks(
+			task,
+			subtasksToGenerate,
+			useResearch,
+			additionalContext,
+			{ log }
+		);
 
-// 		// Calculate the number of subtasks to generate
-// 		const defaultSubtasksCount = parseInt(
-// 			process.env.DEFAULT_SUBTASKS || '3',
-// 			10
-// 		);
-// 		const subtasksToGenerate = numSubtasks || defaultSubtasksCount;
+		if (!generatedSubtasks || !Array.isArray(generatedSubtasks)) {
+			throw new Error('Failed to generate subtasks with AI');
+		}
 
-// 		// Create a JiraTicket instance from the task data
-// 		const jiraTicket = JiraTicket.fromTaskMaster(task);
+		log?.info(
+			`Successfully generated ${generatedSubtasks.length} subtasks. Creating in Jira...`
+		);
 
-// 		// Create a proper wrapper for mcpLog
-// 		const logWrapper = {
-// 			info: (message: string) => report(message),
-// 			warn: (message: string) => report(message),
-// 			error: (message: string) => report(message),
-// 			debug: (message: string) => report(message),
-// 			success: (message: string) => report(message) // Map success to info
-// 		};
+		// Create each subtask in Jira
+		const createdSubtasks = [];
+		const issueKeyMap = new Map(); // Map subtask ID to Jira issue key for dependency linking
 
-// 		report(`Generating ${subtasksToGenerate} subtasks for Jira task ${taskId}`);
+		for (let i = 0; i < generatedSubtasks.length; i++) {
+			const subtask = generatedSubtasks[i];
 
-// 		// Generate subtasks with the AI service
-// 		const generatedSubtasks = await generateSubtasks(
-// 			jiraTicket.toTaskMasterFormat(),
-// 			subtasksToGenerate,
-// 			useResearch,
-// 			additionalContext,
-// 			{
-// 				reportProgress,
-// 				mcpLog: logWrapper,
-// 				session,
-// 				silentMode: isSilentMode()
-// 			}
-// 		);
+			try {
+				// Create a JiraTicket instance for the subtask
+				const jiraTicket = new JiraTicket({
+					title: subtask.title,
+					description: subtask.description || '',
+					details: subtask.details || '',
+					acceptanceCriteria: subtask.acceptanceCriteria || '',
+					testStrategy: subtask.testStrategy || '',
+					priority: subtask.priority || task.priority,
+					issueType: 'Subtask',
+					parentKey: taskId
+				});
 
-// 		if (!generatedSubtasks || !Array.isArray(generatedSubtasks)) {
-// 			throw new Error('Failed to generate subtasks with AI');
-// 		}
+				// Create the subtask in Jira
+				log?.info(
+					`Creating subtask ${i + 1}/${generatedSubtasks.length}: ${subtask.title}`
+				);
+				const createResult = await createJiraIssue(jiraTicket, { jiraConfig, log });
 
-// 		report(
-// 			`Successfully generated ${generatedSubtasks.length} subtasks. Creating in Jira...`
-// 		);
+				if (createResult.success) {
+					const jiraKey = createResult.data.key;
+					createdSubtasks.push({
+						...subtask,
+						id: jiraKey,
+						jiraKey: jiraKey
+					});
+					// Store the mapping from subtask.id to Jira issue key for dependency linking
+					issueKeyMap.set(subtask.id, jiraKey);
+					log?.info(`Successfully created subtask: ${jiraKey}`);
+				} else {
+					log?.warn(
+						`Failed to create subtask: ${createResult.error?.message || 'Unknown error'}`
+					);
+				}
+			} catch (error: any) {
+				log?.error(`Error creating subtask: ${error.message}`);
+				// Continue with the next subtask even if this one fails
+			}
+		}
 
-// 		// Create each subtask in Jira
-// 		const createdSubtasks = [];
-// 		const issueKeyMap = new Map(); // Map subtask ID to Jira issue key for dependency linking
+		// Add dependency links between subtasks
+		log?.info(`Setting up dependencies between subtasks...`);
+		const jiraClient = new JiraClient(jiraConfig);
+		const client = jiraClient.getClient();
+		const dependencyLinks = [];
 
-// 		for (let i = 0; i < generatedSubtasks.length; i++) {
-// 			const subtask = generatedSubtasks[i];
+		// Process each subtask with dependencies
+		for (const subtask of generatedSubtasks) {
+			if (
+				subtask.dependencies &&
+				Array.isArray(subtask.dependencies) &&
+				subtask.dependencies.length > 0
+			) {
+				const dependentIssueKey = issueKeyMap.get(subtask.id);
 
-// 			try {
-// 				// Create a JiraTicket instance for the subtask
-// 				const jiraTicket = new JiraTicket({
-// 					title: subtask.title,
-// 					description: subtask.description || '',
-// 					details: subtask.details || '',
-// 					acceptanceCriteria: subtask.acceptanceCriteria || '',
-// 					testStrategy: subtask.testStrategy || '',
-// 					priority: subtask.priority || task.priority,
-// 					issueType: 'Subtask',
-// 					parentKey: taskId
-// 				});
+				if (dependentIssueKey) {
+					for (const dependencyId of subtask.dependencies) {
+						// Skip dependency on "0" which is often used as a placeholder
+						if (dependencyId === 0) continue;
 
-// 				// Create the subtask in Jira
-// 				report(
-// 					`Creating subtask ${i + 1}/${generatedSubtasks.length}: ${subtask.title}`
-// 				);
-// 				const createResult = await createJiraIssue(jiraTicket, mcpLog || fallbackLogger);
+						const dependencyKey = issueKeyMap.get(dependencyId);
 
-// 				if (createResult.success) {
-// 					const jiraKey = createResult.data.key;
-// 					createdSubtasks.push({
-// 						...subtask,
-// 						id: jiraKey,
-// 						jiraKey: jiraKey
-// 					});
-// 					// Store the mapping from subtask.id to Jira issue key for dependency linking
-// 					issueKeyMap.set(subtask.id, jiraKey);
-// 					report(`Successfully created subtask: ${jiraKey}`);
-// 				} else {
-// 					report(
-// 						`Failed to create subtask: ${createResult.error?.message || 'Unknown error'}`
-// 					);
-// 				}
-// 			} catch (error: any) {
-// 				report(`Error creating subtask: ${error.message}`);
-// 				// Continue with the next subtask even if this one fails
-// 			}
-// 		}
+						if (dependencyKey) {
+							log?.info(
+								`Linking issue ${dependentIssueKey} to depend on ${dependencyKey}`
+							);
 
-// 		// Add dependency links between subtasks
-// 		report(`Setting up dependencies between subtasks...`);
-// 		const jiraClient = new JiraClient();
-// 		const client = jiraClient.getClient();
-// 		const dependencyLinks = [];
+							try {
+								// Create issue link using Jira REST API
+								// "Blocks" link type means the dependency blocks the dependent issue
+								const linkPayload = {
+									type: {
+										name: 'Blocks' // Common link type - this issue blocks the dependent issue
+									},
+									inwardIssue: {
+										key: dependencyKey
+									},
+									outwardIssue: {
+										key: dependentIssueKey
+									}
+								};
 
-// 		// Process each subtask with dependencies
-// 		for (const subtask of generatedSubtasks) {
-// 			if (
-// 				subtask.dependencies &&
-// 				Array.isArray(subtask.dependencies) &&
-// 				subtask.dependencies.length > 0
-// 			) {
-// 				const dependentIssueKey = issueKeyMap.get(subtask.id);
+								await client.post('/rest/api/3/issueLink', linkPayload);
 
-// 				if (dependentIssueKey) {
-// 					for (const dependencyId of subtask.dependencies) {
-// 						// Skip dependency on "0" which is often used as a placeholder
-// 						if (dependencyId === 0) continue;
+								dependencyLinks.push({
+									from: dependentIssueKey,
+									to: dependencyKey
+								});
 
-// 						const dependencyKey = issueKeyMap.get(dependencyId);
+								log?.info(
+									`Created dependency link from ${dependentIssueKey} to ${dependencyKey}`
+								);
+							} catch (error: any) {
+								log?.error(
+									`Error creating dependency link from ${dependentIssueKey} to ${dependencyKey}: ${error.message}`
+								);
+							}
+						} else {
+							log?.warn(
+								`Dependency subtask ID ${dependencyId} not found in created issues`
+							);
+						}
+					}
+				}
+			}
+		}
 
-// 						if (dependencyKey) {
-// 							report(
-// 								`Linking issue ${dependentIssueKey} to depend on ${dependencyKey}`
-// 							);
-
-// 							try {
-// 								// Create issue link using Jira REST API
-// 								// "Blocks" link type means the dependency blocks the dependent issue
-// 								const linkPayload = {
-// 									type: {
-// 										name: 'Blocks' // Common link type - this issue blocks the dependent issue
-// 									},
-// 									inwardIssue: {
-// 										key: dependencyKey
-// 									},
-// 									outwardIssue: {
-// 										key: dependentIssueKey
-// 									}
-// 								};
-
-// 								await client.post('/rest/api/3/issueLink', linkPayload);
-
-// 								dependencyLinks.push({
-// 									from: dependentIssueKey,
-// 									to: dependencyKey
-// 								});
-
-// 								report(
-// 									`Created dependency link from ${dependentIssueKey} to ${dependencyKey}`
-// 								);
-// 							} catch (error: any) {
-// 								report(
-// 									`Error creating dependency link from ${dependentIssueKey} to ${dependencyKey}: ${error.message}`,
-// 									'error'
-// 								);
-// 							}
-// 						} else {
-// 							report(
-// 								`Dependency subtask ID ${dependencyId} not found in created issues`,
-// 								'warn'
-// 							);
-// 						}
-// 					}
-// 				}
-// 			}
-// 		}
-
-// 		// Return the results
-// 		return {
-// 			success: true,
-// 			data: {
-// 				message: `Created ${createdSubtasks.length} subtasks for Jira task ${taskId} with ${dependencyLinks.length} dependency links`,
-// 				taskId,
-// 				subtasksCount: createdSubtasks.length,
-// 				subtasks: createdSubtasks,
-// 				dependencyLinks
-// 			}
-// 		};
-// 	} catch (error: any) {
-// 		report(`Error in expandJiraTask: ${error.message}`);
-// 		return {
-// 			success: false,
-// 			error: {
-// 				code: 'EXPAND_JIRA_TASK_ERROR',
-// 				message: error.message
-// 			}
-// 		};
-// 	}
-// }
+		// Return the results
+		return {
+			success: true,
+			data: {
+				message: `Created ${createdSubtasks.length} subtasks for Jira task ${taskId} with ${dependencyLinks.length} dependency links`,
+				taskId,
+				subtasksCount: createdSubtasks.length,
+				subtasks: createdSubtasks,
+				dependencyLinks
+			}
+		};
+	} catch (error: any) {
+		log?.error(`Error in expandJiraTask: ${error.message}`);
+		return {
+			success: false,
+			error: {
+				code: 'EXPAND_JIRA_TASK_ERROR',
+				message: error.message
+			}
+		};
+	}
+}
 
 /**
  * Removes a Jira subtask
@@ -1988,10 +1947,10 @@ The changes described in the prompt should be applied to ALL tasks in the list. 
  * @param {Object} log - Logger object
  * @returns {Promise<Object>} - Result with success status and data/error
  */
-export async function removeJiraSubtask(subtaskId: string, convert: boolean = false, log: Logger): Promise<any> {
+export async function removeJiraSubtask(subtaskId: string, convert: boolean = false, log: Logger, options: FetchOptions = {}): Promise<any> {
 	try {
 		// Check if Jira is enabled using the JiraClient
-		const jiraClient = new JiraClient();
+		const jiraClient = new JiraClient(options.jiraConfig);
 
 		if (!jiraClient.isReady()) {
 			return {
@@ -2170,10 +2129,10 @@ export async function removeJiraSubtask(subtaskId: string, convert: boolean = fa
  * @param {Object} log - Logger object
  * @returns {Promise<Object>} - Result with success status and data/error
  */
-export async function removeJiraTask(taskId: string, log: Logger): Promise<any> {
+export async function removeJiraTask(taskId: string, log: Logger, options: FetchOptions = {}): Promise<any> {
 	try {
 		// Check if Jira is enabled using the JiraClient
-		const jiraClient = new JiraClient();
+		const jiraClient = new JiraClient(options.jiraConfig);
 
 		if (!jiraClient.isReady()) {
 			return {
@@ -2206,7 +2165,7 @@ export async function removeJiraTask(taskId: string, log: Logger): Promise<any> 
 		// If it's a subtask, delegate to removeJiraSubtask function
 		if (isSubtask) {
 			log.info(`Task ${taskId} is a subtask. Using removeJiraSubtask instead.`);
-			return await removeJiraSubtask(taskId, false, log);
+			return await removeJiraSubtask(taskId, false, log, options);
 		}
 
 		// Check if the task has subtasks
@@ -2241,7 +2200,7 @@ export async function removeJiraTask(taskId: string, log: Logger): Promise<any> 
 			for (const subtask of subtasks) {
 				try {
 					log.info(`Removing subtask ${subtask.id}...`);
-					const subtaskResult = await removeJiraSubtask(subtask.id, false, log);
+					const subtaskResult = await removeJiraSubtask(subtask.id, false, log, options);
 
 					if (subtaskResult.success) {
 						subtasksRemoved++;
@@ -2537,150 +2496,85 @@ export async function removeJiraTask(taskId: string, log: Logger): Promise<any> 
 //  *   - session: Session object from MCP server (optional)
 //  * @returns {Array} Generated subtasks
 //  */
-// async function generateSubtasks(
-// 	task: any,
-// 	numSubtasks: number,
-// 	useResearch: boolean = false,
-// 	additionalContext: string = '',
-// 	{ reportProgress, mcpLog, silentMode, session }: GenerateSubtasksOptions = {}
-// ): Promise<any> {
-// 	try {
-// 		// Check both global silentMode and the passed parameter
-// 		const isSilent =
-// 			silentMode || (typeof silentMode === 'undefined' && isSilentMode());
+export async function generateSubtasks(
+	task: any,
+	numSubtasks: number,
+	useResearch: boolean = false,
+	additionalContext: string = '',
+	{ log }: { log?: Logger } = {}
+): Promise<any> {
+	try {
+		log?.info(`Generating ${numSubtasks} subtasks for task ${task.id}: ${task.title}`);
 
-// 		// Use mcpLog if provided, otherwise use regular log if not silent
-// 		const logFn = mcpLog
-// 			? (level: string, message: string) => {
-// 				if (level === 'info') mcpLog.info(message);
-// 				else if (level === 'warn') mcpLog.warn(message);
-// 				else if (level === 'error') mcpLog.error(message);
-// 				else if (level === 'debug') mcpLog.debug && mcpLog.debug(message);
-// 			}
-// 			: (level: string, message: string) => !isSilent && log(level, message);
+		const systemPrompt = `You are an AI assistant helping with task breakdown for software development. 
+You need to break down a high-level task into ${numSubtasks} specific subtasks that can be implemented one by one.
 
-// 		logFn(
-// 			'info',
-// 			`Generating ${numSubtasks} subtasks for task ${task.id}: ${task.title}`
-// 		);
+Subtasks should:
+1. Be specific and actionable implementation steps
+2. Follow a logical sequence
+3. Each handle a distinct part of the parent task
+4. Include clear guidance on implementation approach
+5. Have appropriate dependency chains between subtasks
+6. Collectively cover all aspects of the parent task
 
-// 		// Only create loading indicators if not in silent mode
-// 		let loadingIndicator = null;
+For each subtask, provide:
+- A clear, specific title
+- Detailed description of the task
+- Dependencies on previous subtasks
+- Testing approach
 
-// 		let streamingInterval = null;
-// 		let responseText = '';
+Each subtask should be implementable in a focused coding session.`;
 
-// 		const systemPrompt = `You are an AI assistant helping with task breakdown for software development. 
-// You need to break down a high-level task into ${numSubtasks} specific subtasks that can be implemented one by one.
+		const contextPrompt = additionalContext
+			? `\n\nAdditional context to consider: ${additionalContext}`
+			: '';
 
-// Subtasks should:
-// 1. Be specific and actionable implementation steps
-// 2. Follow a logical sequence
-// 3. Each handle a distinct part of the parent task
-// 4. Include clear guidance on implementation approach
-// 5. Have appropriate dependency chains between subtasks
-// 6. Collectively cover all aspects of the parent task
+		const userPrompt = `Please break down this task into ${numSubtasks} specific, actionable subtasks:
 
-// For each subtask, provide:
-// - A clear, specific title
-// - Detailed description of the task
-// - Dependencies on previous subtasks
-// - Testing approach
+Task ID: ${task.id}
+Title: ${task.title}
+Description: ${task.description}
+Current details: ${task.details || 'None provided'}
+${contextPrompt}
 
-// Each subtask should be implementable in a focused coding session.`;
+Return exactly ${numSubtasks} subtasks with the following JSON structure:
+[
+    {
+      "id": 1,
+      "title": "Example Task Title",
+      "description": "Detailed description of the task (if needed you can use markdown formatting, e.g. headings, lists, etc.)",
+	  "acceptanceCriteria": "Detailed acceptance criteria for the task following typical Gherkin syntax",
+      "status": "pending",
+      "dependencies": [0],
+      "priority": "high",
+      "details": "Detailed implementation guidance",
+      "testStrategy": "A Test Driven Development (TDD) approach for validating this task. Always specify TDD tests for each task if possible."
+    },
+    // ... more tasks ...
+],
 
-// 		const contextPrompt = additionalContext
-// 			? `\n\nAdditional context to consider: ${additionalContext}`
-// 			: '';
+Note on dependencies: Subtasks can depend on other subtasks with lower IDs. Use an empty array if there are no dependencies.`;
 
-// 		const userPrompt = `Please break down this task into ${numSubtasks} specific, actionable subtasks:
-
-// Task ID: ${task.id}
-// Title: ${task.title}
-// Description: ${task.description}
-// Current details: ${task.details || 'None provided'}
-// ${contextPrompt}
-
-// Return exactly ${numSubtasks} subtasks with the following JSON structure:
-// [
-//     {
-//       "id": 1,
-//       "title": "Example Task Title",
-//       "description": "Detailed description of the task (if needed you can use markdown formatting, e.g. headings, lists, etc.)",
-// 	  "acceptanceCriteria": "Detailed acceptance criteria for the task following typical Gherkin syntax",
-//       "status": "pending",
-//       "dependencies": [0],
-//       "priority": "high",
-//       "details": "Detailed implementation guidance",
-//       "testStrategy": "A Test Driven Development (TDD) approach for validating this task. Always specify TDD tests for each task if possible."
-//     },
-//     // ... more tasks ...
-// ],
-
-// Note on dependencies: Subtasks can depend on other subtasks with lower IDs. Use an empty array if there are no dependencies.`;
-
-// 		try {
-// 			// Update loading indicator to show streaming progress
-// 			// Only create if not in silent mode
-// 			if (!isSilent) {
-// 				let dotCount = 0;
-// 				const readline = await import('readline');
-// 				streamingInterval = setInterval(() => {
-// 					readline.cursorTo(process.stdout, 0);
-// 					process.stdout.write(
-// 						`Generating subtasks for task ${task.id}${'.'.repeat(dotCount)}`
-// 					);
-// 					dotCount = (dotCount + 1) % 4;
-// 				}, 500);
-// 			}
-
-// 			// Configure Anthropic client
-// 			const anthropic = new Anthropic({
-// 				apiKey: process.env.ANTHROPIC_API_KEY,
-// 				// Add beta header for 128k token output
-// 				defaultHeaders: {
-// 					'anthropic-beta': 'output-128k-2025-02-19'
-// 				}
-// 			});
-
-// 			// Use streaming API call
-// 			const stream = await anthropic.messages.create({
-// 				model: 'claude-3-7-sonnet-latest',
-// 				max_tokens: session?.env?.MAX_TOKENS || 15000,
-// 				temperature: session?.env?.TEMPERATURE || 0.4,
-// 				system: systemPrompt,
-// 				messages: [
-// 					{
-// 						role: 'user',
-// 						content: userPrompt
-// 					}
-// 				],
-// 				stream: true
-// 			});
-
-// 			// Process the stream
-// 			for await (const chunk of stream) {
-// 				if (chunk.type === 'content_block_delta' && chunk.delta.type === 'text_delta') {
-// 					responseText += chunk.delta.text;
-// 				}
-// 				if (reportProgress) {
-// 					reportProgress(`Progress: ${Math.round((responseText.length / (session?.env?.MAX_TOKENS || 15000)) * 100)}%`);
-// 				}
-// 			}
-
-// 			if (streamingInterval) clearInterval(streamingInterval);
-
-// 			logFn('info', `Completed generating subtasks for task ${task.id}`);
-
-// 			return parseSubtasksFromText(responseText, 1, numSubtasks, task.id);
-// 		} catch (error) {
-// 			if (streamingInterval) clearInterval(streamingInterval);
-// 			throw error;
-// 		}
-// 	} catch (error) {
-// 		throw error;
-// 	}
-// }
+		try {
+			log?.info(`About to call generateText with system prompt length: ${systemPrompt.length} and user prompt length: ${userPrompt.length}`);
+			
+			const response = await generateText(userPrompt, systemPrompt, {
+				model: 'claude-sonnet-4-20250514',
+				maxTokens: 20000, // Reduced from 50000 to prevent timeouts
+				temperature: 0.1 // Lower temperature for more consistent formatting
+			});
+			
+			log?.info(`Completed generating subtasks for task ${task.id}`);
+			
+			return parseSubtasksFromText(response, 1, numSubtasks, task.id);
+		} catch (error) {
+			log?.error(`Error in generateText call: ${error}`);
+			throw error;
+		}
+	} catch (error) {
+		throw error;
+	}
+}
 
 // /**
 //  * Parse subtasks from Claude's response text
@@ -2691,85 +2585,83 @@ export async function removeJiraTask(taskId: string, log: Logger): Promise<any> 
 //  * @returns {Array} Parsed subtasks
 //  * @throws {Error} If parsing fails or JSON is invalid
 //  */
-// function parseSubtasksFromText(text: string, startId: number, expectedCount: number, parentTaskId: string): any[] {
-// 	// Set default values for optional parameters
-// 	startId = startId || 1;
-// 	expectedCount = expectedCount || 2; // Default to 2 subtasks if not specified
+function parseSubtasksFromText(text: string, startId: number, expectedCount: number, parentTaskId: string): any[] {
+	// Set default values for optional parameters
+	startId = startId || 1;
+	expectedCount = expectedCount || 2; // Default to 2 subtasks if not specified
 
-// 	// Handle empty text case
-// 	if (!text || text.trim() === '') {
-// 		throw new Error('Empty text provided, cannot parse subtasks');
-// 	}
+	// Handle empty text case
+	if (!text || text.trim() === '') {
+		throw new Error('Empty text provided, cannot parse subtasks');
+	}
 
-// 	// Locate JSON array in the text
-// 	const jsonStartIndex = text.indexOf('[');
-// 	const jsonEndIndex = text.lastIndexOf(']');
+	// Locate JSON array in the text
+	const jsonStartIndex = text.indexOf('[');
+	const jsonEndIndex = text.lastIndexOf(']');
 
-// 	// If no valid JSON array found, throw error
-// 	if (
-// 		jsonStartIndex === -1 ||
-// 		jsonEndIndex === -1 ||
-// 		jsonEndIndex < jsonStartIndex
-// 	) {
-// 		throw new Error('Could not locate valid JSON array in the response');
-// 	}
+	// If no valid JSON array found, throw error
+	if (
+		jsonStartIndex === -1 ||
+		jsonEndIndex === -1 ||
+		jsonEndIndex < jsonStartIndex
+	) {
+		throw new Error('Could not locate valid JSON array in the response');
+	}
 
-// 	// Extract and parse the JSON
-// 	const jsonText = text.substring(jsonStartIndex, jsonEndIndex + 1);
-// 	let subtasks;
+	// Extract and parse the JSON
+	const jsonText = text.substring(jsonStartIndex, jsonEndIndex + 1);
+	let subtasks;
 
-// 	try {
-// 		subtasks = JSON.parse(jsonText);
-// 	} catch (parseError: any) {
-// 		throw new Error(`Failed to parse JSON: ${parseError.message}`);
-// 	}
+	try {
+		subtasks = JSON.parse(jsonText);
+	} catch (parseError: any) {
+		throw new Error(`Failed to parse JSON: ${parseError.message}`);
+	}
 
-// 	// Validate array
-// 	if (!Array.isArray(subtasks)) {
-// 		throw new Error('Parsed content is not an array');
-// 	}
+	// Validate array
+	if (!Array.isArray(subtasks)) {
+		throw new Error('Parsed content is not an array');
+	}
 
-// 	// Log warning if count doesn't match expected
-// 	if (expectedCount && subtasks.length !== expectedCount) {
-// 		log(
-// 			'warn',
-// 			`Expected ${expectedCount} subtasks, but parsed ${subtasks.length}`
-// 		);
-// 	}
+	// Log warning if count doesn't match expected
+	if (expectedCount && subtasks.length !== expectedCount) {
+		console.warn(
+			`Expected ${expectedCount} subtasks, but parsed ${subtasks.length}`
+		);
+	}
 
-// 	// Normalize subtask IDs if they don't match
-// 	subtasks = subtasks.map((subtask, index) => {
-// 		// Assign the correct ID if it doesn't match
-// 		if (!subtask.id || subtask.id !== startId + index) {
-// 			log(
-// 				'warn',
-// 				`Correcting subtask ID from ${subtask.id || 'undefined'} to ${startId + index}`
-// 			);
-// 			subtask.id = startId + index;
-// 		}
+	// Normalize subtask IDs if they don't match
+	subtasks = subtasks.map((subtask, index) => {
+		// Assign the correct ID if it doesn't match
+		if (!subtask.id || subtask.id !== startId + index) {
+			console.warn(
+				`Correcting subtask ID from ${subtask.id || 'undefined'} to ${startId + index}`
+			);
+			subtask.id = startId + index;
+		}
 
-// 		// Convert dependencies to numbers if they are strings
-// 		if (subtask.dependencies && Array.isArray(subtask.dependencies)) {
-// 			subtask.dependencies = subtask.dependencies.map((dep: any) => {
-// 				return typeof dep === 'string' ? parseInt(dep, 10) : dep;
-// 			});
-// 		} else {
-// 			subtask.dependencies = [];
-// 		}
+		// Convert dependencies to numbers if they are strings
+		if (subtask.dependencies && Array.isArray(subtask.dependencies)) {
+			subtask.dependencies = subtask.dependencies.map((dep: any) => {
+				return typeof dep === 'string' ? parseInt(dep, 10) : dep;
+			});
+		} else {
+			subtask.dependencies = [];
+		}
 
-// 		// Ensure status is 'pending'
-// 		subtask.status = 'pending';
+		// Ensure status is 'pending'
+		subtask.status = 'pending';
 
-// 		// Add parentTaskId if provided
-// 		if (parentTaskId) {
-// 			subtask.parentTaskId = parentTaskId;
-// 		}
+		// Add parentTaskId if provided
+		if (parentTaskId) {
+			subtask.parentTaskId = parentTaskId;
+		}
 
-// 		return subtask;
-// 	});
+		return subtask;
+	});
 
-// 	return subtasks;
-// }
+	return subtasks;
+}
 
 /**
  * Compress image to ensure it's under 1MB for MCP image injection
